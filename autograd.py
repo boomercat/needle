@@ -1,7 +1,14 @@
+import needle
 from typing import List, Optional, NamedTuple, Tuple, Union
+from .backend_numpy import Device, cpu, all_devices
 from collections import namedtuple
+import numpy as array_api
 import numpy
 NDarry = numpy.ndarray
+
+
+LAZY_MODE = False
+TENSOR_COUNTER = 0
 
 class Op:
     """Operator definition """
@@ -80,6 +87,13 @@ class Value:
             if not value.requires_grad:
                 return value.detach()
         return value
+    
+
+
+
+class TensorOp(Op):
+    def __call__(self, *args):
+        return Tensor.make_from_op(self,args)
 
 class Tensor(Value):
     grad: "Tensor"
@@ -176,10 +190,10 @@ class Tensor(Value):
         raise NotImplementedError()
     
     def __repr__(self):
-        return "needle.Tensor(" + str(self.realize_cached_data()) + ")"
+        return "needle.Tensor(" + str(self.realized_cached_data()) + ")"
 
     def __str__(self):
-        return self.realize_cached_data().__str__()
+        return self.realized_cached_data().__str__()
     
     def numpy(self):
         data = self.realized_cached_data()
@@ -189,40 +203,89 @@ class Tensor(Value):
     
     def __add__(self, other):
         if isinstance(other, Tensor):
-            return
+            return needle.ops.EWiseAdd()(self, other)
         else:
-            return
+            return needle.ops.AddScalar(other)(self)
         
     def __mul__(self, other):
         if isinstance(other, Tensor):
-            return
+            return needle.ops.EWiseMul()(self, other)
         else:
-            return
-        
+            return needle.ops.MulScalar(other)(self)
+
     def __pow__(self, other):
         if isinstance(other, Tensor):
-            return
+            return needle.ops.EWisePow()(self, other)
         else:
-            return
-        
-    def __sub__(self, other);
+            return needle.ops.PowerScalar(other)(self)
+
+    def __sub__(self, other):
         if isinstance(other, Tensor):
-            return
+            return needle.ops.EWiseAdd()(self, needle.ops.Negate()(other))
         else:
-            return
-        
+            return needle.ops.AddScalar(-other)(self)
+
     def __truediv__(self, other):
         if isinstance(other, Tensor):
-            return
+            return needle.ops.EWiseDiv()(self, other)
         else:
-            return
-        
-    def __matmul__(self, other):
-        return
-    
-    def matmul(self, other):
-        return
-    
-    # def sum(sel)
+            return needle.ops.DivScalar(other)(self)
 
-    # def bro
+    def __matmul__(self, other):
+        return needle.ops.MatMul()(self, other)
+
+    def matmul(self, other):
+        return needle.ops.MatMul()(self, other)
+
+    def sum(self, axes=None):
+        return needle.ops.Summation(axes)(self)
+
+    def broadcast_to(self, shape):
+        return needle.ops.BroadcastTo(shape)(self)
+
+    def reshape(self, shape):
+        return needle.ops.Reshape(shape)(self)
+
+    def __neg__(self):
+        return needle.ops.Negate()(self)
+
+    def transpose(self, axes=None):
+        return needle.ops.Transpose(axes)(self)
+
+    __radd__ = __add__
+    __rmul__ = __mul__
+    __rsub__ = __sub__
+    __rmatmul__ = __matmul__
+
+
+#自动微分 每个节点的反向梯度
+# def compute_gradient_of_variables(output_tensor, out_grad):
+#     node_to_output_grad_list= {}
+#     node_to_output_grad_list[output_tensor] = [out_grad]
+
+#     reverse_topo_order = list(reversed(find_topo_sort([output_tensor])))
+#     for node in reverse_topo_order:
+
+#正向遍历节点
+def find_topo_sort(node_list: List[Value]):
+    visited = set()
+    topo_order = []
+    topo_sort_dfs(output_tensor, visited, topo_order)
+    return topo_order
+    
+
+def topo_sort_dfs(node, visited, topo_order):
+    visited.add(node)
+    for sub_node in node.inputs:
+        if sub_node not in visited:
+            topo_sort_dfs(sub_node, visited, topo_order)
+    topo_order.append(node)
+
+
+
+#求节点和
+def sum_node_list(node_list):
+    from operator import add
+    from functools import reduce
+
+    return reduce(add, node_list)

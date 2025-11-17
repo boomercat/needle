@@ -259,13 +259,24 @@ class Tensor(Value):
 
 
 #自动微分 每个节点的反向梯度
-# def compute_gradient_of_variables(output_tensor, out_grad):
-#     node_to_output_grad_list= {}
-#     node_to_output_grad_list[output_tensor] = [out_grad]
+def compute_gradient_of_variables(output_tensor, out_grad):
+    node_to_output_grad_list= {}
+    node_to_output_grad_list[output_tensor] = [out_grad]
 
-#     reverse_topo_order = list(reversed(find_topo_sort([output_tensor])))
-#     for node in reverse_topo_order:
+    reverse_topo_order = list(reversed(find_topo_sort([output_tensor])))
+    for node in reverse_topo_order:
+        grad_list = node_to_output_grad_list[node]
+        grad_sum = sum_node_list(node)
 
+        if node.op is not None:
+            grads = node.op.gradient(grad_sum, node)
+            if not isinstance(grads, tuple):
+                grads = [grads]
+            for grad, input_node in zip(grads, node.inputs):
+                if node_to_output_grad_list.get(input_node) is None:
+                    node_to_output_grad_list[input_node] = []
+                node_to_output_grad_list[input_node].append(grad)
+    
 #正向遍历节点
 def find_topo_sort(node_list: List[Value]):
     visited = set()

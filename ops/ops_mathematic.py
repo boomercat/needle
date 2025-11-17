@@ -123,7 +123,7 @@ class Transpose(TensorOp):
         return array_api.transpose(a,axes)
         
     def gradient(self, out_grad, node):
-        raise NotImplementedError()
+        return out_grad.transpose(self.axes)
     
         
 def transpose(a, axes = None):
@@ -138,9 +138,7 @@ class Reshape(TensorOp):
     
 
     def gradient(self, out_grad, node):
-        ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        return out_grad.reshape(node.inputs[0].shape)
 
 
 def reshape(a, shape):
@@ -155,9 +153,16 @@ class BroadcastTo(TensorOp):
         return array_api.broadcast_to(a, self.shape)
 
     def gradient(self, out_grad, node):
-        ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        input_shape = node.inputs[0].shape
+        out_shape = out_grad.shape
+        #补齐形状,防止出现(2,3)-> (6,2,3)
+        diff = len(out_shape) - len(input_shape)
+        new_in_shape = (1,) * diff + input_shape
+        ax = []
+        for i,(in_s, out_s) in enumerate(zip(new_in_shape, out_shape)):
+            if in_s != out_s and in_s==1:
+                ax.append(i)
+        return out_grad.summation(tuple(ax)).reshape(input_shape)
 
 
 def broadcast_to(a, shape):
@@ -172,9 +177,14 @@ class Summation(TensorOp):
         return array_api.sum(a, axis=self.axes)
 
     def gradient(self, out_grad, node):
-        ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        input_shape = node.inputs[0].shape
+        temp = out_grad
+        out_shape = list(input_shape)
+        for ax in (self.axes if isinstance(self.axes, tuple) else [self.axes]):
+            out_shape[ax] = 1
+        temp = out_grad.reshape(out_shape)
+        return temp.broadcast_to(input_shape)
+        
 
 
 def summation(a, axes=None):
@@ -188,10 +198,18 @@ class MatMul(TensorOp):
         ### END YOUR SOLUTION
 
     def gradient(self, out_grad, node):
-        ### BEGIN YOUR SOLUTION
-        return
-        ### END YOUR SOLUTION
+        A, B = node.inputs
+        grad_A = out_grad @ transpose(B)
+        grad_B = transpose(A) @ out_grad
 
+        if grad_A.shape != A.shape:
+            axes = tuple(i for i in range(len(grad_A.shape)-len(A.shape)))
+            grad_A = grad_A.summation(axes).reshape(A.shape)
+        if grad_B.shape != B.shape:
+            axes = tuple(i for i in range(len(grad_B.shape) - len(B.shape)))
+            grad_b = grad_B.summation(axes).reshape(B.shape)
+        return grad_A, grad_B
+    
 
 def matmul(a, b):
     return MatMul()(a, b)
@@ -246,7 +264,7 @@ class ReLU(TensorOp):
         return array_api.maximum(a,0)
 
     def gradient(self, out_grad, node):
-        out_grad * Tensor(array_api.greater(node.inputs[0].realize_cached_data(), 0))
+        return out_grad * Tensor(array_api.greater(node.inputs[0].realize_cached_data(), 0))
 
 def relu(a):
     return ReLU()(a)

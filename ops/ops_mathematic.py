@@ -112,9 +112,19 @@ class Transpose(TensorOp):
     def __init__(self, axes: Optional[tuple] = None):
         self.axes = axes
     
-    # def compute()
+    def compute(self, a):
+        dim = len(a.shape)
+        #如果axes为空， 默认转置最后两个维度
+        if self.axes is None:
+            self.axes = (dim-2,dim-1)
+        axes = list(range(dim))
+        axes[self.axes[0]] = self.axes[1]
+        axes[self.axes[1]] = self.axes[0]
+        return array_api.transpose(a,axes)
         
-    # def gradient()
+    def gradient(self, out_grad, node):
+        raise NotImplementedError()
+    
         
 def transpose(a, axes = None):
     return Transpose(axes)(a)
@@ -124,9 +134,8 @@ class Reshape(TensorOp):
         self.shape = shape
 
     def compute(self, a):
-        ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        return array_api.reshape(a, self.shape)
+    
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION
@@ -143,9 +152,7 @@ class BroadcastTo(TensorOp):
         self.shape = shape
 
     def compute(self, a):
-        ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        return array_api.broadcast_to(a, self.shape)
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION
@@ -162,9 +169,7 @@ class Summation(TensorOp):
         self.axes = axes
 
     def compute(self, a):
-        ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        return array_api.sum(a, axis=self.axes)
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION

@@ -4,6 +4,9 @@ from .backend_numpy import Device, cpu, all_devices
 from collections import namedtuple
 import numpy as array_api
 import numpy
+
+from needle import init
+
 NDarry = numpy.ndarray
 
 
@@ -97,17 +100,17 @@ class TensorOp(Op):
 
 class Tensor(Value):
     grad: "Tensor"
-    
+
     def __init__(
-            self,
-            array,
-            *,
-            device: Optional[Device] = None,
-            dtype = None,
-            requires_grad = True,
-            **kwargs,
+        self,
+        array,
+        *,
+        device: Optional[Device] = None,
+        dtype=None,
+        requires_grad=True,
+        **kwargs
     ):
-        if isinstance(array,Tensor):
+        if isinstance(array, Tensor):
             if device is None:
                 device = array.device
             if dtype is None:
@@ -115,26 +118,27 @@ class Tensor(Value):
             if device == array.device and dtype == array.dtype:
                 cached_data = array.realized_cached_data()
             else:
+                # fall back, copy through numpy conversion
                 cached_data = Tensor._array_from_numpy(
-                    array.numpy(), device = device, dtype = dtype
+                    array.numpy(), device=device, dtype=dtype
                 )
         else:
             device = device if device else cpu()
-            cached_data = Tensor._array_from_numpy(array, device = device, dtype = dtype)
-        
-        #手动初始化数据，__init__处理输入类型设备等。
-        self._init(None,
-                   [],
-                   cached_data = cached_data,
-                   requires_grad = requires_grad,
-                )
-        
+            cached_data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
+
+        self._init(
+            None,
+            [],
+            cached_data=cached_data,
+            requires_grad=requires_grad,
+        )
+
     @staticmethod
     def _array_from_numpy(numpy_array, device, dtype):
         if array_api is numpy:
-            return numpy.array(numpy_array, dtype = dtype)
-        return array_api.array(numpy_array, device = device, dtype = dtype)
-    
+            return numpy.array(numpy_array, dtype=dtype)
+        return array_api.array(numpy_array, device=device, dtype=dtype)
+
     @staticmethod
     def make_from_op(op: Op, inputs: List["Value"]):
         tensor = Tensor.__new__(Tensor)
@@ -144,9 +148,9 @@ class Tensor(Value):
                 return tensor.detach()
             tensor.realized_cached_data()
         return tensor
-    
+
     @staticmethod
-    def make_const(data, requires_grad = False):
+    def make_const(data, requires_grad=False):
         tensor = Tensor.__new__(Tensor)
         tensor._init(
             None,
@@ -156,57 +160,67 @@ class Tensor(Value):
             else data.realized_cached_data(),
             requires_grad=requires_grad,
         )
+        return tensor
 
     @property
     def data(self):
         return self.detach()
-    
+
     @data.setter
-    def data(self,value):
-        assert isinstance(value,Tensor)
-        # assert value.dtype == self.dtype
+    def data(self, value):
+        assert isinstance(value, Tensor)
+        assert value.dtype == self.dtype, "%s %s" % (
+            value.dtype,
+            self.dtype,
+        )
         self.cached_data = value.realized_cached_data()
 
     def detach(self):
-        """"create a new tensor that shares the data but detach"""
+        """Create a new tensor that shares the data but detaches from the graph."""
         return Tensor.make_const(self.realized_cached_data())
-    
+
     @property
     def shape(self):
         return self.realized_cached_data().shape
-    
+
     @property
     def dtype(self):
         return self.realized_cached_data().dtype
-    
+
     @property
     def device(self):
         data = self.realized_cached_data()
+        # numpy array always sits on cpu
         if array_api is numpy:
             return cpu()
-        return data.device()
-    
+        return data.device
+
     def backward(self, out_grad=None):
-        raise NotImplementedError()
-    
+        out_grad = (
+            out_grad
+            if out_grad
+            else init.ones(*self.shape, dtype=self.dtype, device=self.device)
+        )
+        compute_gradient_of_variables(self, out_grad)
+
     def __repr__(self):
         return "needle.Tensor(" + str(self.realized_cached_data()) + ")"
 
     def __str__(self):
         return self.realized_cached_data().__str__()
-    
+
     def numpy(self):
         data = self.realized_cached_data()
         if array_api is numpy:
-            return data
+            return numpy.array(data)
         return data.numpy()
-    
+
     def __add__(self, other):
         if isinstance(other, Tensor):
             return needle.ops.EWiseAdd()(self, other)
         else:
             return needle.ops.AddScalar(other)(self)
-        
+
     def __mul__(self, other):
         if isinstance(other, Tensor):
             return needle.ops.EWiseMul()(self, other)
@@ -258,44 +272,61 @@ class Tensor(Value):
     __rmatmul__ = __matmul__
 
 
-#自动微分 每个节点的反向梯度
 def compute_gradient_of_variables(output_tensor, out_grad):
-    node_to_output_grad_list= {}
-    node_to_output_grad_list[output_tensor] = [out_grad]
+    """Take gradient of output node with respect to each node in node_list.
 
+    Store the computed result in the grad field of each Variable.
+    """
+    # a map from node to a list of gradient contributions from each output node
+    node_to_output_grads_list: Dict[Tensor, List[Tensor]] = {}
+    # Special note on initializing gradient of
+    # We are really taking a derivative of the scalar reduce_sum(output_node)
+    # instead of the vector output_node. But this is the common case for loss function.
+    node_to_output_grads_list[output_tensor] = [out_grad]
+
+    # Traverse graph in reverse topological order given the output_node that we are taking gradient wrt.
     reverse_topo_order = list(reversed(find_topo_sort([output_tensor])))
-    for node in reverse_topo_order:
-        grad_list = node_to_output_grad_list[node]
-        grad_sum = sum_node_list(node)
 
-        if node.op is not None:
-            grads = node.op.gradient(grad_sum, node)
-            if not isinstance(grads, tuple):
-                grads = [grads]
-            for grad, input_node in zip(grads, node.inputs):
-                if node_to_output_grad_list.get(input_node) is None:
-                    node_to_output_grad_list[input_node] = []
-                node_to_output_grad_list[input_node].append(grad)
-    
-#正向遍历节点
-def find_topo_sort(node_list: List[Value]):
+    for node in reverse_topo_order:
+      grad_list = node_to_output_grads_list[node]
+      grad_sum = sum_node_list(grad_list)
+      node.grad = grad_sum
+
+      if node.op is not None:
+        grads = node.op.gradient(grad_sum, node)
+        if not isinstance(grads, tuple):
+          grads = [grads]
+        for sub_node, grad in zip(node.inputs,grads):
+          if node_to_output_grads_list.get(sub_node) is None:
+            node_to_output_grads_list[sub_node] = []
+          node_to_output_grads_list[sub_node].append(grad)
+
+def find_topo_sort(node_list: List[Value]) -> List[Value]:
+    """Given a list of nodes, return a topological sort list of nodes ending in them.
+
+    A simple algorithm is to do a post-order DFS traversal on the given nodes,
+    going backwards based on input edges. Since a node is added to the ordering
+    after all its predecessors are traversed due to post-order DFS, we get a topological
+    sort.
+    """
     visited = set()
     topo_order = []
-    topo_sort_dfs(output_tensor, visited, topo_order)
+    topo_sort_dfs(node_list[0], visited, topo_order)
     return topo_order
-    
+
 
 def topo_sort_dfs(node, visited, topo_order):
+    """Post-order DFS"""
     visited.add(node)
     for sub_node in node.inputs:
-        if sub_node not in visited:
-            topo_sort_dfs(sub_node, visited, topo_order)
-    topo_order.append(node)
-
+      if sub_node not in visited:
+        topo_sort_dfs(sub_node, visited, topo_order)
+    topo_order.append(node) 
 
 
 #求节点和
 def sum_node_list(node_list):
+    """Custom sum function in order to avoid create redundant nodes in Python sum implementation."""
     from operator import add
     from functools import reduce
 
